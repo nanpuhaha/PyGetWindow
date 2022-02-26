@@ -19,7 +19,10 @@
 
 __version__ = "0.0.9"
 
-import sys, collections, pyrect
+import collections
+import sys
+
+import pyrect
 
 
 class PyGetWindowException(Exception):
@@ -28,6 +31,7 @@ class PyGetWindowException(Exception):
     encounter a problem. If PyGetWindow raises an exception that isn't
     this class, that indicates a bug in the module.
     """
+
     pass
 
 
@@ -62,7 +66,9 @@ class BaseWindow:
             self.resizeTo(newBox.width, newBox.height)
 
         r = self._getWindowRect()
-        self._rect = pyrect.Rect(r.left, r.top, r.right - r.left, r.bottom - r.top, onChange=_onChange, onRead=_onRead)
+        self._rect = pyrect.Rect(
+            r.left, r.top, r.right - r.left, r.bottom - r.top, onChange=_onChange, onRead=_onRead
+        )
 
     def _getWindowRect(self):
         raise NotImplementedError
