@@ -109,6 +109,16 @@ def getActiveWindow():
         return Win32Window(hWnd)
 
 
+def getActiveClient():
+    """Returns a Client object of the currently active (focused) Window."""
+    hWnd = ctypes.windll.user32.GetForegroundWindow()
+    if hWnd == 0:
+        # TODO - raise error instead
+        return None  # Note that this function doesn't use GetLastError().
+    else:
+        return Win32Client(hWnd)
+
+
 def getActiveWindowTitle():
     """Returns a string of the title text of the currently active (focused) Window."""
     # NOTE - This function isn't threadsafe because it relies on a global variable. I don't use nonlocal because I want this to work on Python 2.
@@ -154,6 +164,16 @@ def getWindowsWithTitle(title):
     return windowObjs
 
 
+def getClientsWithTitle(title):
+    """Returns a list of Window objects that substring match ``title`` in their title text."""
+    hWndsAndTitles = _getAllTitles()
+    clientObjs = []
+    for hWnd, winTitle in hWndsAndTitles:
+        if title.upper() in winTitle.upper():  # do a case-insensitive match
+            clientObjs.append(Win32Client(hWnd))
+    return clientObjs
+
+
 def getAllTitles():
     """Returns a list of strings of window titles for all visible windows.
     """
@@ -171,6 +191,20 @@ def getAllWindows():
     enumWindows(enumWindowsProc(foreach_window), 0)
 
     return windowObjs
+
+
+def getAllClients():
+    """Returns a list of Client objects for all visible clients."""
+    clientObjs = []
+
+    def foreach_client(hWnd, lParam):
+        if ctypes.windll.user32.IsWindowVisible(hWnd) != 0:
+            clientObjs.append(Win32Client(hWnd))
+        return True
+
+    enumWindows(enumWindowsProc(foreach_client), 0)
+
+    return clientObjs
 
 
 class Win32Window(BaseWindow):
@@ -302,6 +336,177 @@ class Win32Window(BaseWindow):
     @property
     def visible(self):
         """Return ``True`` if the window is currently visible."""
+        return isWindowVisible(self._hWnd)
+
+
+class Win32Client(BaseClient):
+    def __init__(self, hWnd):
+        self._hWnd = hWnd  # TODO fix this, this is a LP_c_long insead of an int.
+        self._setupRectProperties()
+        self.window = Win32Window(hWnd)
+
+    def _getClientRect(self):
+        """A nice wrapper for GetClientRect().
+
+        Syntax:
+        BOOL GetClientRect(
+          HWND   hWnd,
+          LPRECT lpRect
+        );
+
+        Microsoft Documentation:
+        https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getclientrect
+
+        Other Method:
+            ```python
+            import win32gui
+            return win32gui.GetClientRect(self._hWnd)
+            ```
+        """
+        rect = RECT()
+        result = ctypes.windll.user32.GetClientRect(self._hWnd, ctypes.byref(rect))
+        if result != 0:
+            return Rect(rect.left, rect.top, rect.right, rect.bottom)
+        else:
+            _raiseWithLastError()
+
+    def _SetClientPos(self, left, top, width, height):
+        top_margin = self.top - self.window.top
+        left_margin = self.left - self.window.left
+        width_margin = self.window.width - self.width
+        height_margin = self.window.height - self.height
+
+        result = ctypes.windll.user32.SetWindowPos(
+            self._hWnd,
+            HWND_TOP,
+            left - left_margin,
+            top - top_margin,
+            width + width_margin,
+            height + height_margin,
+            0,
+        )
+
+        return result
+
+    def __repr__(self):
+        return "%s(hWnd=%s)" % (self.__class__.__name__, self._hWnd)
+
+    def __eq__(self, other):
+        return isinstance(other, Win32Client) and self._hWnd == other._hWnd
+
+    def close(self):
+        """Closes this client. This may trigger "Are you sure you want to
+        quit?" dialogs or other actions that prevent the client from
+        actually closing. This is identical to clicking the X button on the
+        client."""
+        result = ctypes.windll.user32.PostMessageA(self._hWnd, WM_CLOSE, 0, 0)
+        if result == 0:
+            _raiseWithLastError()
+
+    def minimize(self):
+        """Minimizes this client."""
+        ctypes.windll.user32.ShowWindow(self._hWnd, SW_MINIMIZE)
+
+    def maximize(self):
+        """Maximizes this client."""
+        ctypes.windll.user32.ShowWindow(self._hWnd, SW_MAXIMIZE)
+
+    def restore(self):
+        """If maximized or minimized, restores the client to it's normal size."""
+        ctypes.windll.user32.ShowWindow(self._hWnd, SW_RESTORE)
+
+    def show(self):
+        """If hidden or showing, shows the client on screen and in title bar."""
+        ctypes.windll.user32.ShowWindow(self._hWnd, SW_SHOW)
+
+    def hide(self):
+        """If hidden or showing, hides the client from screen and title bar."""
+        ctypes.windll.user32.ShowWindow(self._hWnd, SW_HIDE)
+
+    def activate(self):
+        """Activate this client and make it the foreground (focused) client."""
+        result = ctypes.windll.user32.SetForegroundWindow(self._hWnd)
+        if result == 0:
+            _raiseWithLastError()
+
+    def resize(self, widthOffset, heightOffset):
+        """Resizes the client relative to its current size."""
+        result = self._SetClientPos(
+            self.left,
+            self.top,
+            self.width + widthOffset,
+            self.height + heightOffset,
+        )
+        if result == 0:
+            _raiseWithLastError()
+
+    resizeRel = resize  # resizeRel is an alias for the resize() method.
+
+    def resizeTo(self, newWidth, newHeight):
+        """Resizes the client to a new width and height."""
+        result = self._SetClientPos(
+            self.left,
+            self.top,
+            newWidth,
+            newHeight,
+        )
+        if result == 0:
+            _raiseWithLastError()
+
+    def move(self, xOffset, yOffset):
+        """Moves the client relative to its current position."""
+        result = self._SetClientPos(
+            self.left + xOffset,
+            self.top + yOffset,
+            self.width,
+            self.height,
+        )
+        if result == 0:
+            _raiseWithLastError()
+
+    moveRel = move  # moveRel is an alias for the move() method.
+
+    def moveTo(self, newLeft, newTop):
+        """Moves the client to new coordinates on the screen."""
+        result = self._SetClientPos(
+            newLeft,
+            newTop,
+            self.width,
+            self.height,
+        )
+        if result == 0:
+            _raiseWithLastError()
+
+    @property
+    def isMinimized(self):
+        """Returns ``True`` if the client is currently minimized."""
+        return ctypes.windll.user32.IsIconic(self._hWnd) != 0
+
+    @property
+    def isMaximized(self):
+        """Returns ``True`` if the client is currently maximized."""
+        return ctypes.windll.user32.IsZoomed(self._hWnd) != 0
+
+    @property
+    def isActive(self):
+        """Returns ``True`` if the client is currently the active, foreground client."""
+        return getActiveClient() == self
+
+    @property
+    def title(self):
+        """Returns the client title as a string."""
+        textLenInCharacters = ctypes.windll.user32.GetClientTextLengthW(self._hWnd)
+        stringBuffer = ctypes.create_unicode_buffer(
+            textLenInCharacters + 1
+        )  # +1 for the \0 at the end of the null-terminated string.
+        ctypes.windll.user32.GetClientTextW(self._hWnd, stringBuffer, textLenInCharacters + 1)
+
+        # TODO it's ambiguous if an error happened or the title text is just empty. Look into this later.
+        return stringBuffer.value
+
+    @property
+    def visible(self):
+        """Return ``True`` if the client is currently visible."""
         return isWindowVisible(self._hWnd)
 
 
